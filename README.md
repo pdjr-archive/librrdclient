@@ -1,0 +1,2 @@
+# librrdclient
+RRDTool client library.
