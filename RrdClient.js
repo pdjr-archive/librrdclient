@@ -48,9 +48,7 @@ module.exports = class RrdClient {
 	  DSs.forEach(ds => command += (" " + ds.trim())); 
 	  RRAs.forEach(rra => command += (" " + rra.trim())); 
       if (this.options.debug) console.log("RrdClient: issuing command: %s", command);
-      this.socket.write(command + "\n", 'utf8', function(error, data) {
-        if (error) { console.log(data.toString()); reject(false); } else { resolve(true); }
-      });
+      if (this.socket.write(command + "\n", 'utf8')) { resolve(true); } else { reject(false); }
     }.bind(this));
   }
 
@@ -60,9 +58,7 @@ module.exports = class RrdClient {
       var command = "update " + name;
       command += " " + Math.floor((new Date()) / 1000) + ":" + values.join(':');
       if (this.options.debug) console.log("RrdClient: issuing command: %s", command);
-      this.socket.write(command + "\n", 'utf8', function(error, data) {
-        if (error) { console.log(data.toString()); reject(false); } else { resolve(true); }
-      });
+      if (this.socket.write(command + "\n", 'utf8')) { resolve(true); } else { reject(false); }
     }.bind(this));
   }
 /*
