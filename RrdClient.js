@@ -1,4 +1,5 @@
 const net = require('net');
+const { spawn } = require('child_process');
 
 module.exports = class RrdClient {
 
@@ -26,7 +27,6 @@ module.exports = class RrdClient {
       }.bind(this));
     } else {
       return new Promise(function(resolve, reject) {
-        var socket;
         this.socket = new net.Socket();
         this.socket.connect(parts[1], parts[0]);
         this.socket.on('connect', function() { resolve(this.socket); });
@@ -37,8 +37,8 @@ module.exports = class RrdClient {
     }
   }
  
-  async createDatabase(name, opts, DSs, RRAs) {
-    if (this.options.debug) console.log("RrdClient.createDatabase(%s,%s,%s,%s)...", name, JSON.stringify(opts), DSs, RRAs);
+  async create(name, opts, DSs, RRAs) {
+    if (this.options.debug) console.log("RrdClient.create(%s,%s,%s,%s)...", name, JSON.stringify(opts), DSs, RRAs);
     return new Promise(function(resolve, reject) {
 	  var command = "create " + name;
       command += (opts.start)?(" -b " + opts.start):"";
@@ -52,35 +52,37 @@ module.exports = class RrdClient {
     }.bind(this));
   }
 
-  async updateDatabase(name, values) {
-    if (this.options.debug) console.log("RrdClient.updateDatabase(%s,%o)...", name, values);
+  async update(name, seconds, values) {
+    if (this.options.debug) console.log("RrdClient.update(%s,,%s,%o)...", name, seconds,values);
     return new Promise(function(resolve, reject) {
-      var command = "update " + name;
-      command += " " + Math.floor((new Date()) / 1000) + ":" + values.join(':');
+      var command = "UPDATE " + name;
+      command += " " + seconds + ":" + values.join(':');
       if (this.options.debug) console.log("RrdClient: issuing command: %s", command);
       if (this.socket.write(command + "\n", 'utf8')) { resolve(true); } else { reject(false); }
     }.bind(this));
   }
-/*
-  async createChart(name, chart) {
-    if (DEBUG) console.log("rrdtool:createChart('" + group + "', '" + chart + "')...");
 
-    var retval = false;
-    if (RRDCHARTD_SOCKET != null) {
-        retval = await _createChartPromise(group, chart).catch(error => {
-            retval = false;
-        });
-    }
-    return(retval);
-}
-
-var _createChartPromise = function(group, chart) {
+  async flush(name) {
+    if (this.options.debug) console.log("RrdClient.flush(%s)...", name);
     return new Promise(function(resolve, reject) {
-        RRDCHARTD_SOCKET.write(group + " " + chart + "\n", 'utf8', function(error, data) {
-            if (error) { reject(false); } else { resolve(true); }
-        });
-    });
-}
-*/
+      var command = "FLUSH " + name;
+      if (this.options.debug) console.log("RrdClient: issuing command: %s", command);
+      if (this.socket.write(command + "\n", 'utf8')) { resolve(true); } else { reject(false); }
+    }.bind(this));
+  }
+
+  async graph(name, args, logN, logE) {
+    if (this.options.debug) console.log("RrdClient.graph(%s,%s)...", name, JSON.stringify(args));
+    return new Promise(function(resolve, reject) {
+      args.unshift(name); args.unshift("graph");
+      if (this.options.debug) console.log("RrdClient: issuing command: %s %s", "rrdtool", args.join(' '));
+	  var child = spawn("rrdtool", args, { shell: true, env: process.env });
+      if (child != null) {
+        child.on('close', (code) => { if (logN) logN("Successful renotification using '" + path.basename(command) + "'"); });
+	    child.on('error', (code) => { if (logE) logE("Renotification by '" + path.basename(command) + "' failed"); });
+      }
+    }.bind(this));
+  }
+
 }
 
