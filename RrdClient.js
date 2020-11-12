@@ -11,63 +11,103 @@ module.exports = class RrdClient {
   }
 
   /********************************************************************
-   * connect(cstring)
+   * connect(cstring, callback) returns a promise. If <cstring> is
+   * undefined, then the promise immediately resolves 
+   * call resolves to a null value. Otherwise, the function resolves
+   * to 
+   * an open socket connection to the RRD service specified by
+   * <cstring>
    */
 
   async connect(cstring, callback) {
     if (this.options.debug) console.log("RrdClient.connect(%s,%o)...", cstring, callback);
     this.cstring = cstring;
-    var parts = this.cstring.split(':');
-    if (parts.length == 1) { // local pipe
-      return new Promise(function(resolve, reject) {
-        this.socket = net.createConnection(parts[0]);
-        this.socket.on('connect', function() { resolve(this.socket); });
-        this.socket.on('error', function() { reject(null); });
-        this.socket.on('data', function(data) { callback(data.toString()); });
-      }.bind(this));
-    } else {
-      return new Promise(function(resolve, reject) {
-        this.socket = new net.Socket();
-        this.socket.connect(parts[1], parts[0]);
-        this.socket.on('connect', function() { resolve(this.socket); });
-        this.socket.on('error', function() { reject(null); });
-        this.socket.on('close', function(err) { this.socket.connect(parts[1], parts[0]); });
-        this.socket.on('data', function(data) { callback(data.toString('utf8')); });
-      }.bind(this));
-    }
+    return new Promise(function(resolve, reject) {
+      if (this.cstring === undefined) {
+        resolve(this.socket);
+      } else {
+        var parts = this.cstring.split(':').map(p => p.trim());
+        if (parts.length == 1) { // local pipe
+          this.socket = net.createConnection(parts[0]);
+          this.socket.on('connect', function() { resolve(this.socket); });
+          this.socket.on('error', function() { this.socket = null; reject(null); });
+          this.socket.on('data', function(data) { callback(data.toString()); });
+        } else {
+          this.socket = new net.Socket();
+          this.socket.connect(parts[1], parts[0]);
+          this.socket.on('connect', function() { resolve(this.socket); });
+          this.socket.on('error', function() { this.socket = null; reject(null); });
+          this.socket.on('close', function(err) { this.socket.connect(parts[1], parts[0]); });
+          this.socket.on('data', function(data) { callback(data.toString('utf8')); });
+        }
+      }
+    }.bind(this));
   }
  
   async create(name, opts, DSs, RRAs) {
     if (this.options.debug) console.log("RrdClient.create(%s,%s,%s,%s)...", name, JSON.stringify(opts), DSs, RRAs);
     return new Promise(function(resolve, reject) {
-	  var command = "create " + name;
-      command += (opts.start)?(" -b " + opts.start):"";
-      command += (opts.step)?(" -s " + opts.step):"";
-      command += (opts.preserve)?" -O":"";
-      command += (opts.source)?(" -r " + opts.source):"";
-	  DSs.forEach(ds => command += (" " + ds.trim())); 
-	  RRAs.forEach(rra => command += (" " + rra.trim())); 
-      if (this.options.debug) console.log("RrdClient: issuing command: %s", command);
-      if (this.socket.write(command + "\n", 'utf8')) { resolve(true); } else { reject(false); }
+	  var args = [], command;
+      args.push("CREATE"); args.push(name);
+      opts.forEach(opt => { args.push(opt.name); args.push(opt.value); });
+	  DSs.forEach(ds => args.push(ds.trim())); 
+	  RRAs.forEach(rra => args.push(rra.trim())); 
+      if (this.socket) {
+        command = args.join(' ');
+        if (this.options.debug) console.log("RrdClient: issuing command: %s to %s", command, this.cstring);
+        if (this.socket.write(command + "\n", 'utf8')) { resolve(true); } else { reject(false); }
+      } else {
+        command = "rrdtool";
+        if (this.options.debug) console.log("RrdClient: spawning %s with args = %s", command, JSON.stringify(args));
+	    var child = spawn(command, args, { shell: true, env: process.env });
+        if (child != null) {
+          child.on('close', (code) => { resolve(true); });
+	      child.on('error', (code) => { reject(false); });
+        }
+      }
     }.bind(this));
   }
 
-  async update(name, seconds, values) {
-    if (this.options.debug) console.log("RrdClient.update(%s,,%s,%o)...", name, seconds,values);
+  async update(name, values, timestamp = Math.floor(Date.now() / 1000)) {
+    if (this.options.debug) console.log("RrdClient.update(%s,,%s,%s)...", name, values, timestamp);
     return new Promise(function(resolve, reject) {
-      var command = "UPDATE " + name;
-      command += " " + seconds + ":" + values.join(':');
-      if (this.options.debug) console.log("RrdClient: issuing command: %s", command);
-      if (this.socket.write(command + "\n", 'utf8')) { resolve(true); } else { reject(false); }
+      var args = [], command;
+      args.push("UPDATE"); args.push(name);
+      args.push(timestamp + ":" + values.join(':'));
+      if (this.socket) {
+        command = args.join(' ');
+        if (this.options.debug) console.log("RrdClient: issuing command: %s to %s", command, this.cstring);
+        if (this.socket.write(command + "\n", 'utf8')) { resolve(true); } else { reject(false); }
+      } else {
+        command = "rrdtool";
+        if (this.options.debug) console.log("RrdClient: spawning %s with args = %s", command, JSON.stringify(args));
+	    var child = spawn(command, args, { shell: true, env: process.env });
+        if (child != null) {
+          child.on('close', (code) => { resolve(true); });
+	      child.on('error', (code) => { reject(false); });
+        }
+      }
     }.bind(this));
   }
 
   async flush(name) {
     if (this.options.debug) console.log("RrdClient.flush(%s)...", name);
     return new Promise(function(resolve, reject) {
-      var command = "FLUSH " + name;
-      if (this.options.debug) console.log("RrdClient: issuing command: %s", command);
-      if (this.socket.write(command + "\n", 'utf8')) { resolve(true); } else { reject(false); }
+      var args = [], command;
+      args.push("FLUSH"); args.push(name);
+      if (this.socket) {
+        command = args.join(' ');
+        if (this.options.debug) console.log("RrdClient: issuing command: %s to %s", command, this.cstring);
+        if (this.socket.write(command + "\n", 'utf8')) { resolve(true); } else { reject(false); }
+      } else {
+        command = "rrdtool";
+        if (this.options.debug) console.log("RrdClient: spawning %s with args = %s", command, JSON.stringify(args));
+	    var child = spawn(command, args, { shell: true, env: process.env });
+        if (child != null) {
+          child.on('close', (code) => { resolve(true); });
+	      child.on('error', (code) => { reject(false); });
+        }
+      }
     }.bind(this));
   }
 
